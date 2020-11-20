@@ -6,5 +6,5 @@
 
 ## HW 1  (November 20)
 
-[Here](files/hw1/goktugacik-hw1.html) are my Plots
-[Here](files/hw1/goktugacik-hw1.ipynb) is my Code
+[Here](files/hw1/goktugacik-hw1.html) are my code and plots as HTML format
+[Here](files/hw1/goktugacik-hw1.ipynb) is my code as .ipynb format
