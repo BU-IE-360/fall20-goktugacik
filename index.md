@@ -11,5 +11,5 @@
 
 ## HW 2  (December 16 2020)
 
-[Here](files/hw2/goktugacik-hw1.html) is my report as HTML format
-[Here](files/hw2/goktugacik-hw1.ipynb) is my code as .ipynb format
+[Here](files/hw2/goktugacik-hw2.html) is my report as HTML format
+[Here](files/hw2/goktugacik-hw2.ipynb) is my code as .ipynb format
