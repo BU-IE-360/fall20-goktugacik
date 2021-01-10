@@ -1,0 +1,515 @@
+---
+title: "IE 360 HW 3"
+author: "Göktuğ Açık"
+date: "09/01/2020"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    number_sections: true
+    code_folding: hide
+---
+#  Introduction
+The Consumer Price Index (CPI) is a measure that examines the weighted average of prices of a basket of consumer goods and services. The CPI gives the government, businesses, and citizens an idea about prices changes in the economy, and can act as a guide to make informed decisions about the economy.
+
+This study aims to build a model to forecast the Consumer Price Index for Food and Non-Alcoholic Beverages at a monthly level. From EVDS following statistics and survey results relevant to CPI are obtained as predictors: 
+<br>- (USD) US Dollar (Buying) 
+<br>- (EUR) Euro (Buying) 
+<br>- Personal Interest Rate(TRY)(Including Real Person Overdraft Account)(Flow Data, %) 
+<br>- Statement on the current financial situation of household 
+<br>- Financial situation of household expectation (over the next 12 months) 
+<br>- Assessment on spending money on semi-durable goods This (over the next 3 months compared to the past 3 months) 
+<br>- Probability of buying durable goods (over the next 12 months compared to the past 12 months)
+
+Using those predictors and their correlation analysis, a regressive model will be built. Then, the model will be analyzed by other parameters, such as significance and residuals. The model will be improved by trial and errors and decided to provide a 2020-12 CPI forecast.
+
+```{r init, include=FALSE}
+library(openxlsx)
+library(data.table)
+library(zoo)
+library(dplyr)
+library(lubridate)
+library(forecast)
+library(ggplot2)
+library(ggcorrplot)
+library(corrplot)
+library(GGally)
+library(gridExtra)
+library(ggfortify)
+library(plotly)
+```
+#  Manipulation & Visualization
+
+##  Data Manipulation
+
+
+```{r read data, message=FALSE, warning=FALSE}
+#Reads data. Read first 108 rows since rest is appendix and explanation section
+df <- read.xlsx("data_hw3.xlsx", sheet = 1,
+  startRow = 1,
+  colNames = TRUE,
+  rowNames = FALSE,
+  detectDates = TRUE,
+  skipEmptyRows = TRUE,
+  skipEmptyCols = TRUE,
+  rows = c(1:109),
+  cols = NULL,
+  check.names = FALSE,
+  sep.names = ".",
+)
+
+#Adds data.table class to data frame and checks
+DT <- data.table(df)
+print("Classes of the DT object")
+class(DT)
+
+#Sets column names 
+setnames(DT, c("date","us_dollar","euro", "interest_rate", "cpi", "current_financial_situation", "expected_financial_situation", "semi_durable_spending", "durable_spending" ) )
+
+
+
+
+print("Head of the DT object")
+head(DT)
+#print("Tail of the DT object")
+#tail(DT)
+
+#There are some NA values in the interest_rate column. I will fill NA values with fist non-NA value
+DT[is.na(DT)] <- 39.62
+
+
+#Formats date as date format. Day is needed in order to convert so I added 01 to every month as day.
+DT[, date := as.Date(paste(date, "01", sep = "-")), ]
+
+print("Head of the formatted DT object")
+head(DT)
+#print("Tail of the DT object")
+#tail(DT)
+
+#Convert data into Time-Series Object
+TS <-ts(DT,start = c(2012, 1),frequency=12)
+print("Classes of the TS object")
+class(TS)
+```
+## Data Visualization 
+
+
+```{r data viz, message=FALSE, warning=FALSE}
+#Visual representation of the data as line plots
+fig <- plot_ly(
+  type = "scatter",
+  x = DT$date, 
+  y = DT$cpi,
+  name = 'Consumer Price',
+  mode = "lines",
+  line = list(
+        color = '#ff7c43'
+  )) 
+
+fig <- fig %>%
+  layout(
+    title = "CPI FOR FOOD AND NON-ALCOHOLIC BEVERAGES 2012-2020",
+      hovermode = "x unified",
+    legend = list(x = 0.1, y = 0.9),
+      yaxis = list(
+          title = "TRY"
+    ),
+    xaxis = list(
+        type = 'date',
+        tickformat = "%Y-%m",
+        title="DATE"
+  ))
+
+fig
+
+
+fig <- plot_ly(
+  type = "scatter",
+  x = DT$date, 
+  y = DT$euro,
+  name = 'EUR €',
+  mode = "lines",
+  line = list(
+        color = '#ff7c43'
+  )) 
+fig <- fig %>%
+  add_trace(
+    type = "scatter",
+  x = DT$date, 
+  y = DT$us_dollar,
+    name = 'USD $',
+    mode = "lines",
+    line = list(
+        color = '#2f4b7c'
+  )) 
+fig <- fig %>%
+  layout(
+    title = "CURRENCY EXCHAGE RATES 2012-2020",
+      hovermode = "x unified",
+    legend = list(x = 0.1, y = 0.9),
+      yaxis = list(
+          title = "TRY"
+    ),
+    xaxis = list(
+        type = 'date',
+        tickformat = "%Y-%m",
+        title="DATE"
+  ))
+
+fig
+
+
+fig <- plot_ly(
+  type = "scatter",
+  x = DT$date, 
+  y = DT$current_financial_situation,
+  name = 'Current Financial Situation',
+  mode = "lines",
+  line = list(
+        color = '#ff7c43'
+  )) 
+fig <- fig %>%
+  add_trace(
+    type = "scatter",
+  x = DT$date, 
+  y = DT$expected_financial_situation,
+    name = 'Expected Financial Situation',
+    mode = "lines",
+    line = list(
+        color = '#2f4b7c'
+  )) 
+fig <- fig %>%
+  add_trace(
+    type = "scatter",
+  x = DT$date, 
+  y = DT$semi_durable_spending,
+    name = 'Semi-durable Goods Spending ',
+    mode = "lines",
+    line = list(
+        color = '#665191'
+  )) 
+fig <- fig %>%
+  add_trace(
+    type = "scatter",
+  x = DT$date, 
+  y = DT$durable_spending,
+    name = 'Durable Goods Spending',
+    mode = "lines",
+    line = list(
+        color = '#f95d6a'
+  )) 
+fig <- fig %>%
+  layout(
+    title = "SURVEYS ON FINANCIAL SITUATION AND SPENDING 2012-2020",
+    legend = list(x = 100, y = 0.5),
+    yaxis = list(
+          title = "SURVEY SCORE"
+    ),
+    xaxis = list(
+        type = 'date',
+        tickformat = "%Y-%m",
+        title="DATE"
+      ))
+
+fig
+
+fig <- plot_ly(
+  type = "scatter",
+  x = DT$date, 
+  y = DT$interest_rate,
+  name = 'Personal (TRY) INTEREST RATES',
+  mode = "lines",
+  line = list(
+        color = '#ff7c43'
+  )) 
+
+fig <- fig %>%
+  layout(
+    title = "Personal (TRY) INTEREST RATES",
+      hovermode = "x unified",
+    legend = list(x = 0.1, y = 0.9),
+      yaxis = list(
+          title = "PERCENTAGE"
+    ),
+    xaxis = list(
+        type = 'date',
+        tickformat = "%Y-%m",
+        title="DATE"
+  ))
+
+fig
+
+#Remove Date Column and Plot Time Series-Object
+TS2 <- TS[,-1]
+TS2 <- zoo(TS2)
+colnames(TS2)<-c("USD","EUR","Int. Rate","CPI","Cur. Fin. Sit.","Exp. Fin. Sit","Semi-Durable","Durable")
+plot(TS2)
+
+plot_list <- vector(mode = "list", length = 8)
+
+plot_list[[1]] <- ggplot( data= DT, aes(x=date, y=cpi) ) +
+  theme_classic()+
+  theme(plot.title = element_text(size = 6, face = "bold",hjust = 0.5))+
+  labs( x="Date",y="CPI",title=("CPI"))+
+  geom_line(color="#2f4b7c")+
+  geom_smooth(method = "lm", color="#003f5c")
+
+plot_list[[2]] <- ggplot( data= DT, aes(x=date, y=interest_rate) ) +
+  theme_classic()+
+  theme(plot.title = element_text(size = 6, face = "bold",hjust = 0.5))+
+  labs( x="Date",y="PERCENTAGE",title=("INTEREST RATES"))+
+  geom_line(color="#2f4b7c")+
+  geom_smooth(method = "lm", color="#003f5c")
+
+plot_list[[3]] <- ggplot( data= DT, aes(x=date, y=us_dollar)) +
+  theme_classic()+
+  theme(plot.title = element_text(size = 6, face = "bold",hjust = 0.5))+
+  labs( x="Date",y="TRY",title=("USD EXC. RATE"))+
+  geom_line( color="#2f4b7c")+
+  geom_smooth(method = "lm", color="#003f5c")
+
+plot_list[[4]] <- ggplot( data= DT, aes(x=date, y=euro)) +
+  theme_classic()+
+  theme(plot.title = element_text(size = 6, face = "bold",hjust = 0.5))+
+  labs( x="Date",y="TRY",title=("EUR EXC. RATE"))+
+  geom_line( color="#2f4b7c")+
+  geom_smooth(method = "lm", color="#003f5c")
+
+plot_list[[5]] <- ggplot( data= DT, aes(x=date, y=current_financial_situation) ) +
+  theme_classic()+
+  theme(plot.title = element_text(size = 6, face = "bold",hjust = 0.5))+
+  labs( x="Date",y="SURVEY SCORE",title=("SURVEY-CURRENT FINANCIAL SITUATION"))+
+  geom_line(color="#2f4b7c")+
+  geom_smooth( method = "lm", color="#003f5c")
+
+plot_list[[6]] <- ggplot( data= DT, aes(x=date, y=expected_financial_situation) ) +
+  theme_classic()+
+  theme(plot.title = element_text(size = 6, face = "bold",hjust = 0.5))+
+  labs( x="Date",y="SURVEY SCORE",title=("SURVEY-EXPECTED FINANCIAL SITUATION"))+
+  geom_line(color="#2f4b7c")+
+  geom_smooth( method = "lm", color="#003f5c")
+
+plot_list[[7]] <- ggplot( data= DT, aes(x=date, y=semi_durable_spending) ) +
+  theme_classic()+
+  theme(plot.title = element_text(size = 6, face = "bold",hjust = 0.5))+
+  labs( x="Date",y="SURVEY SCORE",title=("SURVEY-SEMI-DURABLE SPENDING"))+
+  geom_line(color="#2f4b7c")+
+  geom_smooth( method = "lm", color="#003f5c")
+
+plot_list[[8]] <- ggplot( data= DT, aes(x=date, y=durable_spending) ) +
+  theme_classic()+
+  theme(plot.title = element_text(size = 6, face = "bold",hjust = 0.5))+
+  labs( x="Date",y="SURVEY SCORE",title=("SURVEY-DURABLE SPENDING"))+
+  geom_line(color="#2f4b7c")+
+  geom_smooth( method = "lm", color="#003f5c")
+
+
+do.call('grid.arrange',c(plot_list, ncol = 3, top="LM SMOOTHED LINE PLOTS BETWEEN 2012-2020"))
+```
+
+The general trends and patterns can be seen on the all graphs above. To understand the relationship between CPI and predictors a correlation analysis can be conducted. Correlation analysis also displays the correlation between predictors and this helps to prevent multicollinearity.
+
+## Correlation Analysis
+
+```{r correlation, message=FALSE, warning=FALSE}
+DT_COR <- setcolorder(DT[,-c(1)], c("cpi","us_dollar","euro","current_financial_situation","expected_financial_situation","semi_durable_spending","durable_spending"))
+correlation_matrix <- cor(DT_COR)
+#correlation_matrix
+
+# Visualizes correlation with ggcorr(). Using lower presents a plot easier to read
+correlation_plot_lower <- ggcorrplot(correlation_matrix, method = "square", type = "lower",
+           show.legend = TRUE, lab = TRUE, lab_col="white", lab_size=2, digits = 2,
+           title = "Lower Correlation Matrix ", colors = c("#d45087","white","#003f5c"),
+           legend.title = "Correlation") + theme(plot.title=element_text(hjust=0.5), 
+                                                 axis.text.x = element_text(angle = 90, vjust =0.5, hjust=0.5))
+correlation_plot_lower
+# Creates correlogram with ggpairs
+ggpairs(DT_COR)+ theme_minimal() + labs(title ="Correlogram of parameters")
+```
+
+
+All variables except durable_spending has high enough correlation and significance. Since, food and beverages are perishable goods, no correlation between spending on durable goods and CPI makes sense.
+
+##  Multivariable Regresison Modelling
+
+A model for estimating CPI based on USD$, Current and Expected Financial Situation, Spending on Semi-durable Goods, and Interest Rate will be built following correlation analysis.
+
+```{r regression1, message=FALSE, warning=FALSE}
+fit1<-lm(cpi~us_dollar+current_financial_situation+expected_financial_situation+semi_durable_spending+interest_rate,data=DT[date>="2012-01-01" & date<="2020-12-01"])
+summary(fit1)
+
+```
+
+
+  The model has high R-squared this means An R-squared value close to 1 indicates that the model explains a large portion of the variance in the outcome variable. However, it will always increase when more variables are added to the model, even if those variables are only weakly associated with the response. Adjusted R-squared takes this problem into consideration. Adjusted R-squared is also close to 1 in the model.
+  
+  It can be seen that p-value of the F-statistic is < 2.2e-16, which is highly significant. This means that, at least, one of the predictor variables is significantly related to the outcome variable. When coefficients inspected, changes in us_dollar and interest_rate are highly significantly associated with changes in CPI. The changes in current_financial_situation and semi_durable_spending are significantly associated with changes in CPI. The change in expected_financial_situation is not significantly associated with changes in CPI.
+
+As the expected_financial_situation variable is not significant, it is possible to remove it from the model. A new model for estimating CPI based on USD$, Current Financial Situation, Spending on Semi-durable Goods, and Interest Rate will be built following correlation analysis.
+
+```{r regression2, message=FALSE, warning=FALSE}
+fit2<-lm(cpi~us_dollar+current_financial_situation+semi_durable_spending+interest_rate,data=DT[date>="2012-01-01" & date<="2020-12-01"])
+summary(fit2)
+
+```
+
+The model equation can be written as follows for **Model1**: <br />
+&emsp;cpi = 426.66 + 58.08*us_dollar - 1.72*current_financial_situation - 1.26*semi_durable_spending - 1.09*interest_rate   
+
+```{r regression3, message=FALSE, warning=FALSE}
+checkresiduals (fit2)
+```
+
+Linear regression assumes that the residual errors are assumed to be normally distributed. As a result of visual analysis on the residuals/count histogram, the model complies with the assumption. However, if residuals are correlated the model misses some information. High ACF value indicated positive autocorellation at lag1 and negative autocorrelation at lag7. Those lags can be used as indepented values to improve the model. Also, variance of the residuals increasing. 
+
+```{r regression4, message=FALSE, warning=FALSE}
+#Add lags to the data
+DT[,lag1:=shift(cpi,type="lag",n=1)]
+DT[,lag7:=shift(cpi,type="lag",n=7)]
+fit3<-lm(cpi~us_dollar+current_financial_situation+semi_durable_spending+interest_rate+lag1+lag7,data=DT[date>="2012-01-01" & date<="2020-12-01"])
+summary(fit3)
+checkresiduals (fit3)
+```
+Adding lag1 made many variables insignificant. The insignificant will be removed from the model.
+
+```{r regression5, message=FALSE, warning=FALSE}
+fit4<-lm(cpi~us_dollar+lag1,data=DT[date>="2012-01-01" & date<="2020-12-01"],na.action="na.exclude") 
+summary(fit4)
+checkresiduals (fit4)
+```
+The model equation can be written as follows for **Model2**: <br />
+&emsp;cpi = 14.82 + 9.46*us_dollar + 0.87*lag1  
+```{r results, message=FALSE, warning=FALSE}
+#Add fitted values and residuals to the data for both chosen models
+DT[,predicted1:=fitted(fit2)]
+DT[,residuals1:=residuals(fit2)]
+
+DT[,predicted2:=fitted(fit4)]
+DT[,residuals2:=residuals(fit4)]
+plot_list <- vector(mode = "list", length = 4)
+plot_list[[1]] <- ggplot(data = DT )+ 
+  theme_classic()+
+  theme(plot.title = element_text(size = 10, face = "bold",hjust = 0.5))+
+  geom_point(aes(x=predicted1,y=residuals1))+
+  geom_abline(slope=1,color="red")+
+  labs(x="Model1 Prediction",
+       y="Residuals",
+       title="Residuals vs Predicted Values for Model1")
+
+plot_list[[2]] <- ggplot(data = DT )+ 
+  theme_classic()+
+  theme(plot.title = element_text(size = 10, face = "bold",hjust = 0.5))+
+  geom_point(aes(x=predicted2,y=residuals2))+
+  geom_abline(slope=1,color="red")+
+  labs(x="Model2 Prediction",
+       y="Residuals",
+       title="Residuals vs Predicted Values for Model2")
+
+plot_list[[3]] <- ggplot(data = DT )+ 
+  theme_classic()+
+  theme(plot.title = element_text(size = 10, face = "bold",hjust = 0.5))+
+  geom_point(aes(x=predicted1,y=cpi))+
+  geom_abline(slope=1,color="#d45087")+
+  labs(x="Model1 Prediction",
+       y="CPI",
+       title="Actual vs Predicted Values for Model1")
+
+plot_list[[4]] <- ggplot(data = DT )+ 
+  theme_classic()+
+  theme(plot.title = element_text(size = 10, face = "bold",hjust = 0.5))+
+  geom_point(aes(x=predicted2,y=cpi))+
+  geom_abline(slope=1,color="#d45087")+
+  labs(x="Model2 Prediction",
+       y="CPI",
+       title="Actual vs Predicted Values for Model2")
+
+
+do.call('grid.arrange',c(plot_list, ncol = 2, top="COMPARISON OF MODELS"))
+
+```
+In both models mean of residuals are close to 0 and their variances are also similar. Although both models fit the actual CPI values well, Model2 slightly fits better.
+
+```{r results2, message=FALSE, warning=FALSE}
+fig <- plot_ly(
+  type = "scatter",
+  x = DT$date, 
+  y = DT$cpi,
+  name = 'Actual Value',
+  mode = "lines+markers",
+  line = list(
+        color = '#003f5c'
+  )) 
+fig <- fig %>%
+  add_trace(
+    type = "scatter",
+  x = DT$date, 
+  y = DT$predicted1,
+    name = 'Model 1 Prediction',
+    mode = "lines+markers",
+    line = list(
+        color = '#f95d6a',
+        dash = 'dash'
+  )) 
+fig <- fig %>%
+  add_trace(
+    type = "scatter",
+  x = DT$date, 
+  y = DT$predicted2,
+    name = 'Model 2 Prediction',
+    mode = "lines+markers",
+
+    line = list(
+        color = '#ffa600',
+        dash = 'dash'
+  )) 
+fig <- fig %>%
+  layout(
+    title = "BOTH MODELS AND ACTUAL CPI VALUES",
+      hovermode = "x unified",
+    legend = list(x = 0.1, y = 0.9),
+      yaxis = list(
+          title = "CPI"
+    ),
+    xaxis = list(
+        type = 'date',
+        tickformat = "%Y-%m",
+        title="DATE"
+  ))
+
+fig
+
+
+```
+
+## Prediction
+
+```{r prediction, message=FALSE, warning=FALSE}
+lr <- DT[, .SD[.N],]    
+lr[,c("cpi","predicted1","predicted2"),]
+
+```
+Actual CPI is 608.36
+Model1 Prediction is 599.62 lower than actual results 8.74
+Model2 Prediction is 602.59 lower than actual results 5.77
+As mentioned in Comparison of Models section both models are good at predicting CPI, Model2 is slightly better.
+
+# Conclusion
+
+In this study, we have obtained two regression models that predict the CPI the Consumer Price Index for Food and Non-Alcoholic Beverages at a monthly level.  Both models have high explanatory power, low residual error.  Both models predicted close values to the actual CPI, and the errors were 8.74 and 5.77
+
+The first model is based on correlation and improved by significance values of the predictors. The first model consists of many initial predictors such as USD Exchange Rate, Interest Rate, Statement on the current financial situation of household, and Assessment on spending money on semi-durable goods. However, the first model had a high autocorrelation between residuals. So, lag values are added to the model, and as a result, another model has obtained. 
+
+
+The second model is generated with the addition of the lag variables as predictors. However, lag1 variable made any other variable then itself and USD Exchange Rate insignificant. This may be a result of interaction between USD Exchange rate and other predictors. On the other hand, the second model fitted actual values slightly better, but maybe it is overfitted. 
+
+I think more test data from 2021 is needed to decide for sure which model is better and more robust. Until 2021 statics are calculated and published on EVDS.
+
+
+
+# References
+•[TCMB EVDS](https://evds2.tcmb.gov.tr/)
+  •   [Plotting ts objects](https://cran.r-project.org/web/packages/ggfortify/vignettes/plot_ts.html)
+  •   [Plotly Documentation](https://plotly.com/)
+  •   [Data Viz Color Picker](https://learnui.design/tools/data-color-picker.html#palette)
+  •   [Multiple Linear Regression in R](http://www.sthda.com/english/articles/40-regression-analysis/168-multiple-linear-regression-in-r/)
