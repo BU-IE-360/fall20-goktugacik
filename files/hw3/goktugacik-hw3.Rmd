@@ -308,7 +308,7 @@ plot_list[[8]] <- ggplot( data= DT, aes(x=date, y=durable_spending) ) +
 do.call('grid.arrange',c(plot_list, ncol = 3, top="LM SMOOTHED LINE PLOTS BETWEEN 2012-2020"))
 ```
 
-The general trends and patterns can be seen on the all graphs above. To understand the relationship between CPI and predictors a correlation analysis can be conducted. Correlation analysis also displays the correlation between predictors and this helps to prevent multicollinearity.
+The general trends and patterns can be seen on the all graphs above, no seasonality detected on CPI. To understand the relationship between CPI and predictors a correlation analysis can be conducted. Correlation analysis also displays the correlation between predictors and this helps to prevent multicollinearity.
 
 ## Correlation Analysis
 
@@ -428,7 +428,8 @@ plot_list[[4]] <- ggplot(data = DT )+
 do.call('grid.arrange',c(plot_list, ncol = 2, top="COMPARISON OF MODELS"))
 
 ```
-In both models mean of residuals are close to 0 and their variances are also similar. Although both models fit the actual CPI values well, Model2 slightly fits better.
+
+In both models mean of residuals are close to 0 and their variances are also similar.Variances are not totally constant and increase after a point but still acceptable  . Although both models fit the actual CPI values well, Model2 slightly fits better.
 
 ```{r results2, message=FALSE, warning=FALSE}
 fig <- plot_ly(
