@@ -19,3 +19,10 @@
 [Here](files/hw3/goktugacik-hw3.html) is my report as HTML format<br>
 [Here](files/hw3/goktugacik-hw3.Rmd) is my code as .Rmd format<br>
 [Here](files/hw3/goktugacik-hw3.ipynb) is my code as .ipynb format<br>
+
+
+## HW 3  (January 29 2021)
+
+[Here](files/hw4/goktugacik-hw4.html) is my report as HTML format<br>
+[Here](files/hw4/goktugacik-hw4.Rmd) is my code as .Rmd format<br>
+[Here](files/hw4/goktugacik-hw4.ipynb) is my code as .ipynb format<br>

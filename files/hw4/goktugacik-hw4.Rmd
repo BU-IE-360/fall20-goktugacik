@@ -1,0 +1,335 @@
+---
+title: "IE 360 HW 4"
+author: "Göktuğ Açık"
+date: "28/01/2020"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    number_sections: true
+
+---
+
+
+```{r init, include=FALSE}
+library(openxlsx)
+library(data.table)
+library(zoo)
+library(dplyr)
+library(lubridate)
+library(forecast)
+library(ggplot2)
+library(ggcorrplot)
+library(corrplot)
+library(GGally)
+library(gridExtra)
+library(ggfortify)
+library(urca)
+```
+#  Introduction
+In Turkey energy flow governed by EPIAS through a day-ahead energy market. A Day-Ahead Energy Market is a financial market where market participants purchase and sell energy at financially binding day-ahead prices for the following day. In order to increase efficiency and prevent market manipulations data gathered by EPIAS is published publicly. Since the market operating on the following day bidding predicting the demand for the next day brings a competitive advantage for any participant in the market.
+
+This study aims to build an autoregressive model to forecast the Mean Electricity Consumption at a daily level, from 9th of January to 23rd of January in 2021. Realized consumption series from 1st of January, 2017 till 8th of January, 2021 will be used as the data source.The data acquired from [EPİAŞ Transparency Platform](https://seffaflik.epias.com.tr/transparency/tuketim/gerceklesen-tuketim/gercek-zamanli-tuketim.xhtml).
+
+To build a successful ARIMA model data stationary is vital and acquired data is affected by trend, seasonality, and outliers. After the data is transformed into a stationary form several models would be tested on the data and selected model would be used for forecasting the given time period. Some metrics such as the daily bias, daily mean absolute percentage error for each date weighted mean absolute percentage error over a 14-days period will be used to measure performance.
+
+
+
+#  Data Manipulation 
+
+
+```{r read data, message=FALSE, warning=FALSE, echo=FALSE}
+#Reads data. Read first 35726 rows
+df <- read.xlsx("data_hw4.xlsx", sheet = 1,
+  startRow = 1,
+  colNames = TRUE,
+  rowNames = FALSE,
+  detectDates = TRUE,
+  skipEmptyRows = TRUE,
+  skipEmptyCols = TRUE,
+  rows = c(1:35726),
+  cols = NULL,
+  check.names = FALSE,
+  sep.names = ".",
+)
+
+#Adds data.table class to data frame and checks
+DT <- data.table(df)
+
+#Sets column names 
+setnames(DT, c("Date","Hour","Consumption" ) )
+#str(DT)
+#head(DT)
+
+#Formats date as date format. 
+DT[, Date := as.Date(Date,format = "%d.%m.%Y"), ]
+# This versions returns NA for some reason DT <- DT[, Consumption := as.numeric(Consumption),]
+
+#https://stackoverflow.com/questions/21027806/replacing-commas-and-dots-in-r
+DT <- DT[, Consumption := as.numeric((gsub(",", ".", gsub("\\.", "", Consumption)))),]
+
+#str(DT)
+#head(DT)
+
+#Daily Mean DT
+DDT <- DT[,.(Consumption = mean(Consumption)),by=.(Date)] 
+
+#Separate data into train and forecast
+DDT <- DT[,.(Consumption = mean(Consumption)),by=.(Date)] 
+
+DailyM_DT <-copy(DDT)
+DailyM_DT <- DailyM_DT[Date <= as.Date('2021-01-08')]
+
+Forecast_DT <-copy(DDT)
+Forecast_DT <- Forecast_DT[Date >= as.Date('2021-01-09')]
+Forecast_DT <- Forecast_DT[Date <= as.Date('2021-01-23')]
+
+print("Last Rows of Daily Mean Electricity Consumption until 2021-01-08")
+tail(DailyM_DT)
+print("First Rows of Daily Mean Electricity Consumption after 2021-01-08")
+head(Forecast_DT)
+
+```
+#  Visual Analysis
+```{r data viz, message=FALSE, warning=FALSE, echo=FALSE}
+#Visual representation of the data as line plots
+ p1 <- ggplot( data= DailyM_DT, aes(x=Date, y=Consumption) ) +
+  theme_classic()+
+  theme(plot.title = element_text(size = 12, face = "bold",hjust = 0.5))+
+  labs( x="Date",y="Consumption (MWh)",title=("Mean Daily Consumption"))+
+  geom_line(color="#2f4b7c")
+
+p1
+
+
+```
+
+In this study autoregressive (AR) and moving average (MA) models will be used. In order to use those models the data should be stationary as possible. Stationary series are flat looking series, without trend, constant variance over time, a constant autocorrelation structure over time and no periodic fluctuations called seasonality. According to my visual analysis there is a obivious seasonality correlated with actual season (e.g consumpuion increases in summer), thre are many outliers, data does not have a signifiant linear trend although mean is changing. Also Spring 2020 quarter is not follow the pattern due to COVID-19 restrictions, consumption is much lower since industrial production halted with lockdowns. The variance does not change over time so Time series decomposition can be made as additive. To understand and achieve the stationary better autocorrelation analysis, KPSS Unit Root Test, decomposition analysis can be conducted.
+
+# Stationary and Decomposition
+```{r acf, message=FALSE, warning=FALSE , echo=FALSE}
+  acf(DailyM_DT$Consumption, main= "Autocorrelation of Mean Daily Consumption")
+
+```
+
+
+The noticable positive autocorrelation among lag 1 probably resulted by trend and lag 7 probably resulted by weekly seasonality is spotted on ACF results. Some autocorrelation may be result of the propagation of the previous autocorrelations. PAFC may give a clearer perspective.
+
+
+```{r pacf, message=FALSE, warning=FALSE , echo=FALSE}
+ pacf(DailyM_DT$Consumption,main= " Partial Autocorrelation of Mean Daily Consumption")
+
+```
+
+
+PACF supports the previous claims, every 7 days follows a similar pattern, there is a weekly seasonality. 
+
+
+```{r kpss, message=FALSE, warning=FALSE , echo=FALSE}
+ summary(ur.kpss(DailyM_DT$Consumption))
+
+```
+ Kwiatkowski–Phillips–Schmidt–Shin (KPSS) test are used for testing a null hypothesis that an observable time series is stationary around the trend. The null hypothesis is not rejected for the series yet value still close to the critical values. More stationary series may be achievable by removing seasonality.
+ 
+ 
+ In order to achieve that, three new columns are created for means values for day, month, year respectively. Then for every consumption value day and month effect on consumption will be replaced by that year's average.
+ 
+ 
+```{r adjust, message=FALSE, warning=FALSE, echo=FALSE}
+
+DailyM_DT <- DailyM_DT[, day := as.factor(weekdays(Date))]
+DailyM_DT <- DailyM_DT[, day_adjustment := mean(Consumption),by=day]
+
+DailyM_DT <- DailyM_DT[, month := as.factor(month(Date))]
+DailyM_DT <- DailyM_DT[, month_adjustment := mean(Consumption),by=month]
+
+DailyM_DT <- DailyM_DT[, year := as.factor(year(Date))]
+DailyM_DT <- DailyM_DT[, year_adjustment := mean(Consumption),by=year]
+
+DailyM_DT <- DailyM_DT[, Adjusted_Consumption := Consumption- day_adjustment - month_adjustment + year_adjustment*2 ]
+
+
+ p1 <- ggplot( data= DailyM_DT, aes(x=Date, y=Adjusted_Consumption) ) +
+  theme_classic()+
+  theme(plot.title = element_text(size = 12, face = "bold",hjust = 0.5))+
+  labs( x="Date",y="Consumption (MWh)",title=("Adjusted Consumption"))+
+  geom_line(color="#2f4b7c")
+
+p1
+
+acf(DailyM_DT$Adjusted_Consumption, main= "Autocorrelation of Adjusted Consumption")
+pacf(DailyM_DT$Adjusted_Consumption, main= "Partial Autocorrelation of Adjusted Consumption")
+
+
+```
+
+The adjustments based on the day, month, year has removed the seasonality effect on the lag 7. However, there are still an autocorrelation on the lag1. In order to remove it lag1 value will be subtracted form the Adjusted Consumption
+
+
+```{r lag1, message=FALSE, warning=FALSE , echo=FALSE}
+ DailyM_DT <- DailyM_DT[,lag1:=shift(Adjusted_Consumption,1)]
+DailyM_DT <- DailyM_DT[, Adjusted_Consumption_WithLag1 := Adjusted_Consumption - lag1 ]
+ p1 <- ggplot( data= DailyM_DT, aes(x=Date, y=Adjusted_Consumption_WithLag1) ) +
+  theme_classic()+
+  theme(plot.title = element_text(size = 12, face = "bold",hjust = 0.5))+
+  labs( x="Date",y="Consumption (MWh)",title=("Adjusted Consumption Minus Lag1"))+
+  geom_line(color="#2f4b7c")
+
+p1
+
+acf(DailyM_DT$Adjusted_Consumption_WithLag1[-1], main= "Autocorrelation of Adjusted Consumption Minus Lag1")
+pacf(DailyM_DT$Adjusted_Consumption_WithLag1[-1], main= "Partial Autocorrelation of Adjusted Consumption Minus Lag1")
+summary(ur.kpss(DailyM_DT$Adjusted_Consumption_WithLag1))
+```
+
+As explained after the first KPSS test more stationary series are achieved by removing seasonality. Still there are outliers. Since this is a real life data, real life events such as holidays effect the data and create outliers. Unfortunately I couldn't come up with a model related to the real life event to deal with outliers. Instead, I will tsclean built-in function on my time series object.
+
+
+```{r ts, message=FALSE, warning=FALSE , echo=FALSE}
+#Convert data into Time-Series Object
+#Convert data into Time-Series Object
+TS1<-ts(DailyM_DT$Consumption,frequency=7)
+DTS1 <- decompose(TS1,type="additive")
+print("Actual Consumption")
+plot(DTS1)
+
+TS2 <-ts(DailyM_DT$Adjusted_Consumption_WithLag1[-1],frequency=7)
+DTS2 <- decompose(TS2,type="additive")
+print("Adjusted Consumption With Lag1")
+plot(DTS2)
+
+TS3 <-ts(DailyM_DT$Adjusted_Consumption_WithLag1[-1],frequency=7)
+TS3 <- tsclean(TS3)
+DTS3 <- decompose(TS3,type="additive")
+print("Adjusted Consumption With Lag1 Outliers Removed")
+plot(DTS3)
+
+
+```
+
+# Forecasting 
+
+## Model Selection
+
+Two different univariate time series objects Adjusted Consumption With Lag1 and Trend Decomposition are given as parameter to auto.arima function. After finding best arima model AIC and BIC is calculated. AIC estimates the relative amount of information lost by a given model, the penalty term is larger in BIC (penalty for the number of parameters). Lower AIC or BIC is better.
+
+```{r model12, message=FALSE, warning=FALSE , echo=FALSE}
+model1 <- auto.arima(DailyM_DT$Adjusted_Consumption_WithLag1[-1],seasonal=F,trace=T)
+print("AIC model1:")
+AIC(model1)
+print("BIC model1:")
+BIC(model1)
+
+model2 <- auto.arima(DTS3$random,seasonal=F,trace=T)
+print("AIC model2:")
+AIC(model2)
+print("BIC model2:")
+BIC(model2)
+
+
+```
+
+Since Model2 has lower AIC and BIC values it will be used to forecast the electricity consumption between 9th of January to 23rd of January in 2021.
+
+## Forecasted Values
+The values are forecasted with forecast function with model2 as the parameter. Later removed values stripped from data to achieve stationary inserted back to the data. Finally predictions are combined with the actual electricity consumption between 9th of January to 23rd of January in 2021 and plotted.
+
+
+```{r forecast, message=FALSE, warning=FALSE , echo=FALSE}
+forecasted <- forecast(model1, h = 15)
+prediction <- rep(0, 15)
+
+prediction[1] <- forecasted$mean[1] + DailyM_DT$Adjusted_Consumption_WithLag1[nrow(DailyM_DT)]
+for (i in 2:15){
+  prediction[i] <- prediction[i-1]+forecasted$mean[i]
+}
+
+prediction <- prediction - 2*DailyM_DT$year_adjustment[1469]
+prediction <- prediction + DailyM_DT$day_adjustment[7:21]
+prediction <- prediction + DailyM_DT$month_adjustment[1]
+prediction <- prediction + DailyM_DT$lag1[7:21]
+last_trend_value <-tail(DTS2$trend[!is.na(DTS2$trend)],1)
+lt <- rep(last_trend_value*2, 15)
+prediction <- prediction + lt
+
+date <- as.Date('2021-01-09')
+for(k in 2:14){
+  date[k] <- date[k-1]+1
+}
+
+
+
+Forecast_DT[,Model1_Prediction:=prediction,]
+
+forecasted <- forecast(model2, h = 15)
+prediction2 <- rep(0, 15)
+
+prediction2[1] <- forecasted$mean[1] + DailyM_DT$Adjusted_Consumption_WithLag1[nrow(DailyM_DT)]
+for (i in 2:15){
+  prediction2[i] <- prediction2[i-1]+forecasted$mean[i]
+}
+
+prediction2 <- prediction2 - 2*DailyM_DT$year_adjustment[1469]
+prediction2 <- prediction2 + DailyM_DT$day_adjustment[7:21]
+prediction2 <- prediction2 + DailyM_DT$month_adjustment[1]
+prediction2 <- prediction2 + DailyM_DT$lag1[7:21]
+last_trend_value <-tail(DTS3$trend[!is.na(DTS3$trend)],1)
+lt <- rep(last_trend_value*25, 15)
+prediction2 <- prediction2 + lt
+
+prediction2 <- as.data.table(prediction2)
+date <- as.Date('2021-01-09')
+for(k in 2:14){
+  date[k] <- date[k-1]+1
+}
+
+
+
+Forecast_DT[,Model2_Prediction:=prediction2,]
+Forecast_DT
+ p1 <- ggplot( data= Forecast_DT ) +
+  theme_classic()+
+  theme(plot.title = element_text(size = 12, face = "bold",hjust = 0.5))+
+  labs( x="Date",y="Consumption (MWh)",title=("Actual and Predicted Mean Daily Consumption"))+
+  geom_line( aes(x=Date, y=Consumption,colour="Actual"))+
+    geom_line(aes(x=Date, y=Model2_Prediction ,colour="Predicted"))+
+scale_color_manual(values = c("blue", "green")) 
+
+p1
+```
+
+
+## Performance
+```{r performance, message=FALSE, warning=FALSE , echo=FALSE}
+Forecast_DT[,Abs_Error:= abs(Consumption - Model2_Prediction),]
+Forecast_DT[,Perc_Error:= Abs_Error/Consumption*100,]
+error_test <- function(actual, forecasted){
+  n=length(actual)
+  error = actual-forecasted
+  mean=mean(actual)
+  sd=sd(actual)
+  bias = sum(error)/sum(actual)
+  mape = sum(abs(error/actual))/n
+  mad = sum(abs(error))/n
+  wmape = mad/mean
+  df = data.frame(n,mean,sd,bias,mape,mad,wmape)
+  return(df)
+}
+
+print("Error test for model1")
+error_test(Forecast_DT$Consumption,Forecast_DT$Model1_Prediction)
+print("Error test for model2")
+error_test(Forecast_DT$Consumption,Forecast_DT$Model2_Prediction)
+```
+
+WMAPE value of the second model is much smaller than the first model. This results are not surprising since we have already conducted preliminary analysis on models and choose the model2.
+
+# Conclusion
+In this study,  two ARIMA models that predict the mean electricity at a daily level are obtained. In order to achieve that the data is transformed into a stationary form. ACF, PACF, KPSS test used to determine stationary. 
+
+The first model is based on Adjusted Consumption With a predictor called Lag1. The best model has declared by auto.arima functions with parameters (2,0,1).
+
+The second model is generated with the data freed  from the outliers. The best model has declared by auto.arima functions with parameters (0,0,1). Tthe second model fitted actual values much better.
+
+Since the electricity consumption is publicly available models can be run everyday and see their performance on the long run.
