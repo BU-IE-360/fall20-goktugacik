@@ -1,0 +1,367 @@
+---
+title: "IE 360 Project Report - Group 14"
+author: "Enes F. Kaçar, Göktuğ Açık, Suphi Paşa"
+date: "15/02/2020"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    number_sections: true
+    code_folding: hide
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require(openxlsx)
+require(data.table)
+require(zoo)
+require(dplyr)
+require(lubridate)
+require(forecast)
+require(ggplot2)
+require(ggcorrplot)
+require(corrplot)
+require(GGally)
+require(gridExtra)
+require(ggfortify)
+require(plotly)
+require(plyr)
+require(urca)
+require(fpp)
+require(lubridate)
+require(reticulate)
+py_install("pandas")
+py_install("numpy")
+py_install("requests")
+py_install("scikit-learn ")
+```
+# Introduction
+
+In Turkey energy flow governed by EPIAS through a day-ahead energy market. A Day-Ahead Energy Market is a financial market where market participants purchase and sell energy at financially binding day-ahead prices for the following day. In order to increase efficiency and prevent market manipulations data gathered by EPIAS is published publicly. Since the market operating on the following day bidding predicting the demand for the next day brings a competitive advantage for any participant in the market.
+
+This study aims to build and compare various models to forecast the Electricity Consumption at a hourly level, from 29th of January to 12th of February in 2021. 
+
+We have worked with similar data in Homework 4 and made daily mean forecasts. We have decided that our time series methods did not performed well enough in HW4 and tried to enhance with regression method thanks to our findings in the literature review. We also have found and discussed on other viable methods not covered in lectures and decided on Random Forest ML.
+
+# Literature Review
+
+In the literature review, we have found that many similar studies conducted with many different models. There were many different models with different approaches such as Genetic algorithm, ARIMA/SARIMA, regression, Support Vector Machine (SVM), Artificial neural networks (ANN), and Random Forest Machine Learning (RFML). Related articles can be found on the references section. We decided to build a Random Forest Machine Learning model since there was a study directly comparing it with ARIMA models (although it was not related to electricity consumption it was on influenza spread) and it was mode practicable/applicable for us.
+
+# Model 1
+
+We tried to manipulate the consumption and temperature data then forecast consumption for the 2 day ahead period. To analyze data we read data then plotted Date-Consumption plot first.
+
+```{r, message=FALSE, warning=FALSE}
+df <- read.csv("C:\\Users\\Raven\\Desktop\\Ders 2020\\IE 360\\project\\bulk_consumption_with_temp.csv")
+dt <- data.table(df)
+dt[,Date:= as.Date(Date)]
+plot(dt$Date,dt$Consumption, xlab="Date", ylab="Consumption")
+```
+
+As we can see there is a seasonality effect. We created day of week(dow), month, trend and mean temperature columns to experiment. Then created base regression model with those.
+
+```{r, message=FALSE, warning=FALSE}
+dt[,Month:= month(Date)]
+dt[,dow:=weekdays(Date)]
+dt[,trend:= 1:.N]
+dt[,mean_temp:=(T_1+T_2+T_3+T_4+T_5+T_6+T_7)/7]
+fit <- glm(Consumption~-1+mean_temp+trend+dow+as.factor(Hour)+as.factor(Month), dt, family = "gaussian")
+summary(fit)
+```
+
+We need to manipulate temperature effect more, so we created daily and absolute(abs difference from total mean temp) temperature columns. Then tried model to see if there is improvement.
+
+```{r, message=FALSE,warning=FALSE}
+dt[,dayly_temp:=mean(mean_temp,na.rm = T),by=list(Date)]
+mt <-mean(dt$T_1+dt$T_2+dt$T_3+dt$T_4+dt$T_5+dt$T_6+dt$T_7)/7
+dt[,abs_temp:=abs(dayly_temp-mt)]
+fit <- glm(Consumption~-1+abs_temp+trend+dow+as.factor(Hour)+as.factor(Month), dt, family = "gaussian")
+summary(fit)
+fit2 <- glm(Consumption~-1+dayly_temp+trend+dow+as.factor(Hour)+as.factor(Month), dt, family = "gaussian")
+summary(fit2)
+```
+
+Abs temp is working better. Then we plot the residuals to see problems of model.
+
+```{r, message=FALSE,warning=FALSE}
+plot(dt$Date, fit$residuals , xlab="Date", ylab="Residuals")
+```
+
+There is special day effect creating outliers so we tried to get rid of them by creating a dummy variable names is.outlier. Is.outlier is one if residual of that day is lesser than %2 of data, zero otherwise.
+
+```{r, message=FALSE,warning=FALSE}
+dt[,is.outlier:=0]
+dt[,residuals:=residuals(fit)]
+quan2=quantile(dt$residuals,0.02, na.rm = T)
+dt[residuals<quan2,is.outlier:=1]
+fit_new <- glm(Consumption~-1+abs_temp+trend+dow+is.outlier+as.factor(Hour)+as.factor(Month), dt, family = "gaussian")
+summary(fit_new)
+```
+
+Our model improved, we check stationarity with new residuals. 
+
+```{r, message=FALSE,warning=FALSE}
+dt[,residuals_new:=fit_new$residuals]
+unt_test=ur.kpss(dt$residuals_new)
+summary(unt_test)
+```
+
+Not stationary so we create a differ column with lag 24 and try kpss test again.
+
+```{r,message=FALSE,warning=FALSE}
+dt[,differ:=residuals_new-shift(residuals_new,24)]
+unt_test2=ur.kpss(dt$differ)
+summary(unt_test2)
+```
+
+Differ is stationary enough, we start to ARIMA.
+
+```{r,message=FALSE,warning=FALSE}
+arima_fitted=auto.arima(dt$differ,seasonal=F,trace=T)
+summary(arima_fitted)
+```
+We can make forecast by forecasting 48 ahead ARIMA, creating 48 lag residuals by repeating 24 lag res 2 times ,getting forecast from regression model (fit_new) then adding them all.
+
+# Model2
+
+
+## The Data
+
+```{python,message=FALSE,warning=FALSE}
+
+import pandas as pd
+import numpy as np
+import json
+import datetime
+import requests
+
+# Below is a sample script for your submissions.
+# We advise you to play around with the code and read it carefully.
+# Feel free to grab the utility functions below and experiment with them yourself.
+# We want to remind you that you can submit more than once, and we will use the latest one.
+# IMPORTANT: Below, you need to fill your `predict` function for your predictions
+# and add your username & password in the space below.
+# Set submit_now to false if you are experimenting and just want to see the result of your predictions.
+# Set to True if you actually want to submit.
+
+URL = 'http://46.101.124.77'
+
+USERNAME = "Group14"
+PASSWORD = "wio6Z5O4tW9vH54P"
+submit_now = False  # Set this to True if you want to submit your predictions.
+
+
+def predict(data: pd.DataFrame):
+  ### YOUR CODE GOES HERE
+  """
+    Students are expected to fill this method.
+    :param data: Data that was obtained from the API.
+    :return: A list of floats with length 24
+    """
+
+  predictions = [i for i in range(24)]
+  ### YOUR CODE ENDS HERE
+  print(predictions)  # Should be a list of forecasts
+  # i.e. [0, 1, 2, 3, ...., 23]
+  return predictions
+
+
+### CODE BY THE TEACHING STAFF BEGINS HERE - YOU DO NOT NEED TO CHANGE###
+
+
+def get_token(username, password):
+  body = {"username": username, "password": password}
+  r = requests.post(f'{URL}/token/', data=body)
+  r = r.json()
+  token = r["key"]
+  return token
+
+
+def get_data(token, start_date='2020-03-20'):
+  # Date format : YEAR-MONTH-DAY
+  header = {'Authorization': f'Token {token}'}
+  r = requests.get(f'{URL}/dataset/',
+                   params={'start_date': start_date},
+                   headers=header)
+  r = r.json()
+  data = pd.DataFrame.from_dict(r)
+  data["event_date"] = pd.to_datetime(data["event_date"])
+  data = data.sort_values(by=["event_date"])
+  return data
+
+
+def check_format(predictions):
+  assert isinstance(predictions, list)
+  for i, pred in enumerate(predictions):
+    try:
+      predictions[i] = float(pred)
+    except:
+      error_str = f"Your prediction for Hour = {i} is not a numerical value. Please cast it to either native Python int/floats, or np.number subtype before submission."
+      raise ValueError(error_str)
+
+
+def send_submission(predictions: dict, token: str, submit_now: bool):
+  check_format(predictions)
+  submission = predictions
+  print(f"Your submission will be : {submission}")
+
+  if not submit_now:
+    print("You did not submit.")
+    return
+
+  submission_body = {"submission": json.dumps(submission)}
+  header = {'Authorization': f'Token {token}'}
+  r = requests.post(f'{URL}/submission/', data=submission_body, headers=header)
+
+  if r.status_code == 201:
+    print(
+        "Successfully submitted. Below you can see the details of your submission"
+    )
+
+  else:
+    print(
+        "Could not submit. Please check the error message below, contact the assistant if needed."
+    )
+
+  r = r.json()
+  print(r)
+
+
+if __name__ == "__main__":
+  ### YOUR CODE GOES HERE
+  username = "Group14"
+  password = "wio6Z5O4tW9vH54P"
+  ### YOUR CODE ENDS HERE
+  token = get_token(username, password)
+  data = get_data(token)
+  ###prediction = predict(data)
+  ###send_submission(prediction, token, submit_now)
+
+data.head()
+
+```
+
+## Date Features
+
+```{python,message=FALSE,warning=FALSE}
+data['Date'] = pd.to_datetime(data['event_date'])
+#data['Date'] = data['Date'].dt.strftime('%d.%m.%Y')
+data['Date'] = data['Date'].dt.strftime('%Y.%m.%d')
+data['year'] = pd.DatetimeIndex(data['Date']).year
+data['month'] = pd.DatetimeIndex(data['Date']).month
+data['day'] = pd.DatetimeIndex(data['Date']).day
+data['dayofyear'] = pd.DatetimeIndex(data['Date']).dayofyear
+data['weekofyear'] = pd.DatetimeIndex(data['Date']).weekofyear
+data['weekday'] = pd.DatetimeIndex(data['Date']).weekday
+data['quarter'] = pd.DatetimeIndex(data['Date']).quarter
+data['is_month_start'] = pd.DatetimeIndex(data['Date']).is_month_start
+data['is_month_end'] = pd.DatetimeIndex(data['Date']).is_month_end
+print(data.info())
+```
+Sometimes classical time series algorithms won't suffice for making powerful predictions. In such cases, it's sensible to convert the time series data to a machine learning algorithm by creating features from the time variable. The code below uses the pd.DatetimeIndex() function to create time features like year, day of the year, quarter, month, day, weekdays, etc.
+
+## Dummy Encoding
+
+Some of the variables in the dataset, such as year or quarter, need to be treated as categorical variables. So, we will convert these variables to numeric variables that can be used as factors using a technique called dummy encoding. In this technique, the features are encoded so there is no duplication of the information. This is achieved by passing in the argument drop_first=True to the .get_dummies() function, as done in the code below. The last line prints the information about the data.
+
+```{python,message=FALSE,warning=FALSE}
+data = pd.get_dummies(data, columns=['year'], drop_first=True, prefix='year')
+
+data = pd.get_dummies(data, columns=['month'], drop_first=True, prefix='month')
+
+data = pd.get_dummies(data, columns=['weekday'], drop_first=True, prefix='wday')
+data = pd.get_dummies(data, columns=['quarter'], drop_first=True, prefix='qrtr')
+
+data = pd.get_dummies(data, columns=['is_month_start'], drop_first=True, prefix='m_start')
+
+data = pd.get_dummies(data, columns=['is_month_end'], drop_first=True, prefix='m_end')
+
+data.info()
+
+
+```
+
+
+## Data Partitioning
+
+With the data prepared, we are ready to move to machine learning in the subsequent sections. However, before moving to predictive modeling techniques, it's important to divide the data into training and test sets.
+
+In time series analysis, however, we are not able to use this simple command, since observations in our time series datasets are not independent. The characteristics of time series data, such as autoregressive nature, trend, seasonality, or cyclicality, would not allow a random split to be valid.
+
+```{python,message=FALSE,warning=FALSE}
+data=data.sort_values(by=['Date', 'event_hour'])
+X=data[['event_hour', 't_1', 't_2',
+       't_3', 't_4', 't_5', 't_6', 't_7', 'day', 'dayofyear',
+       'weekofyear', 'wday_1', 'wday_2', 'wday_3', 'wday_4', 'wday_5',
+       'wday_6', 'wday_1', 'wday_2', 'wday_3', 'wday_4', 'wday_5', 'wday_6']]
+y=data[['consumption']]
+#data.shape
+#y.iloc[791]
+X_train=X.head(791)
+X_test=X.tail(48)
+y_train=y.head(791)
+y_test=y.tail(48)
+X_train = X_train.values
+y_train = y_train.values
+#print(X_train.shape)
+#print(y_train.shape)
+X_test = X_test.values
+y_test = y_test.values
+
+#print(X_test.shape)
+#print(y_test.shape)
+```
+
+## Random Forest
+
+Decision Trees are useful, but they often tend to overfit the training data, leading to high variances in the test data. Random Forest algorithms overcome this shortcoming by reducing the variance of the decision trees. They are called a Forest because they are the collection, or ensemble, of several decision trees. One major difference between a Decision Tree and a Random Forest model is how the splits happen. In a Random Forest, instead of trying splits on all the features, a sample of features is selected for each split, thereby reducing the variance of the model.
+
+In scikit-learn, the RandomForestRegressor class is used for building regression trees. The first line of code below instantiates the Random Forest Regression model with an n_estimators value of 1000. The argument n_estimators indicates the number of trees in the forest. The second line fits the model to the training data.
+
+The third line of code predicts, while the fourth and fifth lines print the evaluation metrics—RMSE and R-squared—on the training set. The same steps are repeated on the test dataset in the sixth to eighth lines of code.
+
+```{python,message=FALSE,warning=FALSE}
+from sklearn import model_selection
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import r2_score
+from sklearn.metrics import mean_squared_error
+from math import sqrt
+
+#RF model
+model_rf = RandomForestRegressor(n_estimators=1000, oob_score=True, random_state=100)
+model_rf.fit(X_train, y_train) 
+pred_train_rf= model_rf.predict(X_train)
+print(np.sqrt(mean_squared_error(y_train,pred_train_rf)))
+print(r2_score(y_train, pred_train_rf))
+
+pred_test_rf = model_rf.predict(X_test)
+print(pred_test_rf)
+```
+
+According to mean squared error the model has a good accuracy.
+According to R squared score the model explaining enough variance. 
+
+
+# Results 
+
+We have used those two models to predict hourly consumption for 29th, 30th, 31th of January and calculated Weighted Mean Absolute Percentage Errors. Model 1 had 0.335422493, 0.190382615, 0.234456921 WPAPE respectively. Model 2 had 0.224362132, 0.105402221, 0.125799237 WPAPE respectively. So, decided to submit Model 2 predictions for the rest of the project.
+
+# Conclusion
+
+We created two models and they performed according to our expectations. However, there is always a room for improvements. For example, investigating outliers/finding and including special occasions such as holidays would improve the overall results. Also, we used Random Forest ML algorithm without having a solid theoretical background. If we would have a better understanding of this algorithm we would tune the parameters to obtain better results.
+
+# References
+  •   [ARIMA forecasting of primary energy demand by fuel in Turkey](https://www.researchgate.net/publication/4947915_ARIMA_forecasting_of_primary_energy_demand_by_fuel_in_Turkey)
+  
+  •   [Comparison of ARIMA and Random Forest time series models for prediction of avian influenza H5N1 outbreaks](https://bmcbioinformatics.biomedcentral.com/articles/10.1186/1471-2105-15-276)
+  
+  •   [Forecasting electricity consumption: A comparison of regression analysis, neural networks and least squares support vector machines](https://www.researchgate.net/publication/270006584_Forecasting_electricity_consumption_A_comparison_of_regression_analysis_neural_networks_and_least_squares_support_vector_machines)
+  
+  •   [Electrical Energy Consumption Estimation by Genetic Algorithm and Analysis of Variance](https://www.researchgate.net/publication/265477677_Electrical_Energy_Consumption_Estimation_by_Genetic_Algorithm_and_Analysis_of_Variance)
+  
+  
+  
+  
