@@ -26,3 +26,8 @@
 [Here](files/hw4/goktugacik-hw4.html) is my report as HTML format<br>
 [Here](files/hw4/goktugacik-hw4.Rmd) is my code as .Rmd format<br>
 [Here](files/hw4/goktugacik-hw4.ipynb) is my code as .ipynb format<br>
+
+## Project  (February 15 2021)
+
+[Here](files/project/group14-project-report.html) is our report as HTML format<br>
+[Here](files/project/group14-project-report.Rmd) is our code as .Rmd format<br>
